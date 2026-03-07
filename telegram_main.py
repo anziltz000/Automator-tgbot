@@ -3,7 +3,6 @@ import time
 import logging
 import json
 import requests
-import yt_dlp
 from threading import Thread
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -11,7 +10,9 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, Callb
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-# This is the URL n8n will give you when you create a Webhook node!
+# The URL of your new Render Video Processor
+PROCESSOR_URL = os.getenv("PROCESSOR_URL", "https://processor-n8n-automator.onrender.com/process")
+# Where the processor should send the final video
 N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "YOUR_N8N_WEBHOOK_URL_HERE")
 
 # Setup Logging
@@ -21,7 +22,6 @@ logging.basicConfig(
 )
 
 # --- KEEP-AWAKE FLASK SERVER ---
-# Render requires a web server to stay alive. We use this to give the Cron Job a target to ping.
 app = Flask(__name__)
 
 @app.route('/')
@@ -119,75 +119,53 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target = data.split("_")[1]
         context.user_data['target'] = target
         
-        await query.edit_message_text(f"⏳ Downloading video to Render server...")
-        await send_to_n8n(update, context)
+        await query.edit_message_text(f"⏳ Sending instructions to Video Factory...")
+        await send_to_processor(update, context)
 
-# --- THE WORKER: Download and Send Binary to n8n ---
-async def send_to_n8n(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# --- THE DISPATCHER: Send JSON to the Video Processor ---
+async def send_to_processor(update: Update, context: ContextTypes.DEFAULT_TYPE):
     video_url = context.user_data.get('url')
     campaign = context.user_data.get('campaign')
     position = context.user_data.get('position')
-    target = context.user_data.get('target')
-
-    # Status message variable so we can edit it as progress happens
+    
     status_msg = update.callback_query.message
 
-    # Temporary file setup
-    timestamp = int(time.time())
-    filepath = f"/tmp/reel_{timestamp}.mp4"
-    
-    ydl_opts = {
-        'outtmpl': filepath,
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'merge_output_format': 'mp4',
-        'quiet': True,
-        'no_warnings': True
-    }
-
     try:
-        # 1. Download video and extract metadata
-        print(f"📥 Downloading: {video_url}", flush=True)
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=True)
-            caption = info.get('description', 'No caption found')
-
-        await status_msg.edit_text(f"🚀 Download complete! Uploading file to n8n Factory...")
-        print("🚀 Sending binary file to n8n...", flush=True)
-
-        # 2. Package the file and data to send to n8n
-        with open(filepath, 'rb') as f:
-            files = {'video_file': (os.path.basename(filepath), f, 'video/mp4')}
-            data = {
-                'campaign': campaign,
-                'position': position,
-                'target': target,
-                'caption': caption,
-                'original_url': video_url
-            }
+        print(f"📡 Sending task to Processor: {video_url}", flush=True)
+        
+        # Package the instructions into a lightweight JSON payload
+        payload = {
+            'url': video_url,
+            'campaign': campaign,
+            'position': position,
+            'webhook_reply_url': N8N_WEBHOOK_URL # Tells the processor where to send the final file
+        }
+        
+        # Fire it over to the Render Video Processor
+        response = requests.post(PROCESSOR_URL, json=payload)
+        response.raise_for_status()
+        
+        # Check the queue position from the processor's response
+        reply_data = response.json()
+        queue_pos = reply_data.get('queue_position', 1)
+        
+        if queue_pos == 1:
+            await status_msg.edit_text(f"✅ Success! Factory is processing your video right now.\nCampaign: {campaign.upper()}\n\nIt will arrive in your n8n workflow shortly.")
+        else:
+            await status_msg.edit_text(f"✅ Task queued! You are #{queue_pos} in line.\nCampaign: {campaign.upper()}\n\nThe processor will handle it automatically.")
             
-            # Beam the data to your n8n Webhook
-            response = requests.post(N8N_WEBHOOK_URL, files=files, data=data)
-            response.raise_for_status()
-            
-        await status_msg.edit_text(f"✅ Success! File delivered to n8n.\nCampaign: {campaign.upper()}\nn8n is now sending it to the Video Processor.")
-        print("✅ Successfully pushed to n8n!", flush=True)
+        print("✅ Successfully dispatched to Video Processor!", flush=True)
 
     except Exception as e:
-        print(f"❌ Error in Render Bot: {str(e)}", flush=True)
-        await status_msg.edit_text(f"❌ Failed to process or send to n8n.\nError: {str(e)}")
-
-    finally:
-        # 3. CRITICAL: Delete the file from Render
-        if os.path.exists(filepath):
-            os.remove(filepath)
-            print("🧹 Cleaned up Render temporary storage.", flush=True)
+        print(f"❌ Error pinging Processor: {str(e)}", flush=True)
+        await status_msg.edit_text(f"❌ Failed to reach Video Factory.\nError: {str(e)}")
 
 if __name__ == '__main__':
     if not TOKEN:
         print("❌ Error: TELEGRAM_TOKEN not found.", flush=True)
         exit(1)
 
-    # 1. Start the Flask Keep-Awake Server in the background
+    # 1. Start the Flask Keep-Awake Server
     server_thread = Thread(target=run_flask)
     server_thread.daemon = True
     server_thread.start()
