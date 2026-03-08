@@ -127,6 +127,7 @@ async def send_to_processor(update: Update, context: ContextTypes.DEFAULT_TYPE):
     video_url = context.user_data.get('url')
     campaign = context.user_data.get('campaign')
     position = context.user_data.get('position')
+    target = context.user_data.get('target') # <-- EXTRACT THE TARGET
     
     status_msg = update.callback_query.message
 
@@ -138,7 +139,8 @@ async def send_to_processor(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'url': video_url,
             'campaign': campaign,
             'position': position,
-            'webhook_reply_url': N8N_WEBHOOK_URL # Tells the processor where to send the final file
+            'target': target, # <-- ADD TARGET TO THE PAYLOAD
+            'webhook_reply_url': N8N_WEBHOOK_URL 
         }
         
         # Fire it over to the Render Video Processor
