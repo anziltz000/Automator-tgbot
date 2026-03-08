@@ -143,11 +143,21 @@ async def send_to_processor(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'webhook_reply_url': N8N_WEBHOOK_URL 
     }
 
-    # 1. THE ALARM CLOCK: Ping in the background using asyncio.to_thread
+    # --- THE VIP BROWSER DISGUISE ---
+    # This tricks Render into thinking a real human on Google Chrome clicked a link
+    vip_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1"
+    }
+
+    # 1. THE ALARM CLOCK: Ping in the background using the Disguise
     try:
-        # Timeout is 2s because we EXPECT it to fail/timeout while sleeping
-        await asyncio.to_thread(requests.get, PROCESSOR_WAKE_URL, timeout=2)
-        await asyncio.to_thread(requests.get, N8N_WAKE_URL, timeout=2)
+        # Timeout increased to 10s to ensure Render fully registers the "human" visit
+        await asyncio.to_thread(requests.get, PROCESSOR_WAKE_URL, headers=vip_headers, timeout=10)
+        await asyncio.to_thread(requests.get, N8N_WAKE_URL, headers=vip_headers, timeout=10)
     except:
         pass # Ignore the error, the alarm bell was still rung!
 
@@ -164,6 +174,7 @@ async def send_to_processor(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 requests.post, 
                 PROCESSOR_POST_URL, 
                 json=payload, 
+                headers=vip_headers, # We use the disguise here too just to be safe!
                 timeout=60
             )
             
@@ -213,4 +224,3 @@ if __name__ == '__main__':
     application.add_handler(CallbackQueryHandler(handle_buttons))
     
     application.run_polling()
-
