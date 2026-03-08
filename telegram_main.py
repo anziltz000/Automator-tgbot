@@ -1,4 +1,4 @@
-import os
+    import os
 import logging
 import json
 import requests
@@ -10,9 +10,13 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, Callb
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-PROCESSOR_URL = os.getenv("PROCESSOR_URL", "https://processor-n8n-automator.onrender.com/process")
+# Keep Webhook URL dynamic so you don't expose your exact n8n webhook path
 N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "YOUR_N8N_WEBHOOK_URL_HERE")
-N8N_BASE_URL = "https://n8n-render-oo07.onrender.com" # Used just to wake up n8n
+
+# Hardcoded URLs for the Alarm Clock
+PROCESSOR_POST_URL = "https://processor-n8n-automator.onrender.com/process"
+PROCESSOR_WAKE_URL = "https://processor-n8n-automator.onrender.com"
+N8N_WAKE_URL = "https://n8n-render-oo07.onrender.com"
 
 # Setup Logging
 logging.basicConfig(
@@ -130,18 +134,6 @@ async def send_to_processor(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     status_msg = update.callback_query.message
 
-    # 1. THE ALARM CLOCK: Ping both servers instantly to start their boot sequence
-    try:
-        processor_base = PROCESSOR_URL.replace("/process", "")
-        requests.get(processor_base, timeout=2)
-    except:
-        pass # We expect a timeout, we just wanted to knock on the door
-        
-    try:
-        requests.get(N8N_BASE_URL, timeout=2)
-    except:
-        pass
-
     # Package the instructions
     payload = {
         'url': video_url,
@@ -151,19 +143,31 @@ async def send_to_processor(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'webhook_reply_url': N8N_WEBHOOK_URL 
     }
 
+    # 1. THE ALARM CLOCK: Ping in the background using asyncio.to_thread
+    try:
+        # Timeout is 2s because we EXPECT it to fail/timeout while sleeping
+        await asyncio.to_thread(requests.get, PROCESSOR_WAKE_URL, timeout=2)
+        await asyncio.to_thread(requests.get, N8N_WAKE_URL, timeout=2)
+    except:
+        pass # Ignore the error, the alarm bell was still rung!
+
     # 2. THE SNOOZE BUTTON (Retry Loop)
-    # n8n takes 2 mins. 6 retries * 30 seconds = 3 full minutes of patience.
-    max_retries = 6 
+    max_retries = 6 # 6 attempts x 30 seconds = 3 full minutes of patience.
     
     for attempt in range(max_retries):
         try:
             await status_msg.edit_text(f"⏳ Attempt {attempt + 1}/{max_retries}: Waking up the factory (Processor & n8n). This takes ~2 mins...")
             print(f"📡 Sending task to Processor (Attempt {attempt + 1})...", flush=True)
             
-            # Fire the actual request. Use a 60s timeout so it doesn't hang forever on a dead connection.
-            response = requests.post(PROCESSOR_URL, json=payload, timeout=60)
+            # RUN IN BACKGROUND THREAD: This prevents the bot from freezing!
+            response = await asyncio.to_thread(
+                requests.post, 
+                PROCESSOR_POST_URL, 
+                json=payload, 
+                timeout=60
+            )
             
-            # If we hit the 502/503 Bad Gateway, Render is still booting.
+            # If we hit the 502/503/504 Bad Gateway, Render is still booting.
             if response.status_code in [502, 503, 504]:
                 print(f"Render sleeping (Status {response.status_code}). Waiting 30s...")
                 await asyncio.sleep(30)
@@ -183,7 +187,7 @@ async def send_to_processor(update: Update, context: ContextTypes.DEFAULT_TYPE):
             print("✅ Successfully dispatched to Video Processor!", flush=True)
             return # Exit the function, we are done!
 
-        except (requests.exceptions.RequestException, requests.exceptions.ReadTimeout) as e:
+        except Exception as e:
             # If the connection drops while Render is booting
             print(f"❌ Network issue while booting: {str(e)}. Retrying in 30s...", flush=True)
             await asyncio.sleep(30)
