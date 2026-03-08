@@ -14,7 +14,7 @@ N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "YOUR_N8N_WEBHOOK_URL_HERE")
 
 PROCESSOR_POST_URL = "https://processor-n8n-automator.onrender.com/process"
 PROCESSOR_WAKE_URL = "https://processor-n8n-automator.onrender.com"
-N8N_WAKE_URL = "https://n8n-render-oo07.onrender.com"
+# NO MORE n8n wake URL needed! 24/7 Koyeb power! 🚀
 
 # Setup Logging
 logging.basicConfig(
@@ -90,8 +90,9 @@ def get_upload_keyboard():
     return InlineKeyboardMarkup(keyboard)
 
 def get_confirmation_keyboard():
+    # Changed text to singular since we only check 1 thing now!
     keyboard = [
-        [InlineKeyboardButton("✅ I made sure they are running!", callback_data="confirm_awake")]
+        [InlineKeyboardButton("✅ I made sure it is running!", callback_data="confirm_awake")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -126,11 +127,11 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target = data.split("_")[1]
         context.user_data['target'] = target
         
-        await query.edit_message_text("🔍 Checking if factory is awake...")
+        await query.edit_message_text("🔍 Checking if Processor is awake...")
         await check_factory_status(update, context)
         
     elif data == "confirm_awake":
-        await query.edit_message_text("🚀 Sending task to factory now...")
+        await query.edit_message_text("🚀 Sending task to Processor now...")
         await send_to_processor(update, context)
 
 # --- THE HEALTH CHECKER ---
@@ -147,17 +148,15 @@ async def check_factory_status(update: Update, context: ContextTypes.DEFAULT_TYP
         pass # It timed out, so it's definitely asleep!
 
     if is_awake:
-        # If the cron job is active (after college), it skips the manual check entirely!
-        await status_msg.edit_text("✅ Factory is fully awake! Processing video...")
+        await status_msg.edit_text("✅ Processor is fully awake! Processing video...")
         await send_to_processor(update, context)
     else:
-        # Factory is asleep. Give the user the manual override!
+        # Factory is asleep. Give the user the single manual override link!
         text = (
-            "⚠️ **The Factory is currently ASLEEP!**\n\n"
-            "Please click both links below to wake them up. Wait until the web pages load on your phone:\n\n"
-            f"1️⃣ [Wake up Processor]({PROCESSOR_WAKE_URL})\n"
-            f"2️⃣ [Wake up n8n]({N8N_WAKE_URL})\n\n"
-            "*(Once you are sure they are awake, click the button below!)*"
+            "⚠️ **The Processor is currently ASLEEP!**\n\n"
+            "Tap the link below to copy it, or open it in your browser to wake it up:\n\n"
+            f"🔌 **`{PROCESSOR_WAKE_URL}`**\n\n"
+            "*(Once the page loads, click the button below!)*"
         )
         await status_msg.edit_text(text, parse_mode='Markdown', reply_markup=get_confirmation_keyboard(), disable_web_page_preview=True)
 
@@ -188,7 +187,7 @@ async def send_to_processor(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         if response.status_code in [502, 503, 504]:
-            await status_msg.edit_text("❌ Factory wasn't fully awake yet! Please click the links again, wait 30 seconds, and try submitting a new link.")
+            await status_msg.edit_text("❌ Processor wasn't fully awake yet! Please click the link again, wait 30 seconds, and try submitting a new link.")
             return
             
         response.raise_for_status() 
@@ -203,7 +202,7 @@ async def send_to_processor(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await status_msg.edit_text(f"✅ Task queued! You are #{queue_pos} in line.\nCampaign: {campaign.upper()}")
 
     except Exception as e:
-        await status_msg.edit_text(f"❌ Failed to reach Factory. Error: {str(e)}")
+        await status_msg.edit_text(f"❌ Failed to reach Processor. Error: {str(e)}")
 
 if __name__ == '__main__':
     if not TOKEN:
