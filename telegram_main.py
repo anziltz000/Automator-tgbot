@@ -1,8 +1,8 @@
 import os
-import time
 import logging
 import json
 import requests
+import asyncio
 from threading import Thread
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -10,10 +10,9 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, Callb
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-# The URL of your new Render Video Processor
 PROCESSOR_URL = os.getenv("PROCESSOR_URL", "https://processor-n8n-automator.onrender.com/process")
-# Where the processor should send the final video
 N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "YOUR_N8N_WEBHOOK_URL_HERE")
+N8N_BASE_URL = "https://n8n-render-oo07.onrender.com" # Used just to wake up n8n
 
 # Setup Logging
 logging.basicConfig(
@@ -119,7 +118,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target = data.split("_")[1]
         context.user_data['target'] = target
         
-        await query.edit_message_text(f"⏳ Sending instructions to Video Factory...")
+        await query.edit_message_text(f"⏰ Ringing the factory alarm bell...")
         await send_to_processor(update, context)
 
 # --- THE DISPATCHER: Send JSON to the Video Processor ---
@@ -127,40 +126,70 @@ async def send_to_processor(update: Update, context: ContextTypes.DEFAULT_TYPE):
     video_url = context.user_data.get('url')
     campaign = context.user_data.get('campaign')
     position = context.user_data.get('position')
-    target = context.user_data.get('target') # <-- EXTRACT THE TARGET
+    target = context.user_data.get('target')
     
     status_msg = update.callback_query.message
 
+    # 1. THE ALARM CLOCK: Ping both servers instantly to start their boot sequence
     try:
-        print(f"📡 Sending task to Processor: {video_url}", flush=True)
+        processor_base = PROCESSOR_URL.replace("/process", "")
+        requests.get(processor_base, timeout=2)
+    except:
+        pass # We expect a timeout, we just wanted to knock on the door
         
-        # Package the instructions into a lightweight JSON payload
-        payload = {
-            'url': video_url,
-            'campaign': campaign,
-            'position': position,
-            'target': target, # <-- ADD TARGET TO THE PAYLOAD
-            'webhook_reply_url': N8N_WEBHOOK_URL 
-        }
-        
-        # Fire it over to the Render Video Processor
-        response = requests.post(PROCESSOR_URL, json=payload)
-        response.raise_for_status()
-        
-        # Check the queue position from the processor's response
-        reply_data = response.json()
-        queue_pos = reply_data.get('queue_position', 1)
-        
-        if queue_pos == 1:
-            await status_msg.edit_text(f"✅ Success! Factory is processing your video right now.\nCampaign: {campaign.upper()}\n\nIt will arrive in your n8n workflow shortly.")
-        else:
-            await status_msg.edit_text(f"✅ Task queued! You are #{queue_pos} in line.\nCampaign: {campaign.upper()}\n\nThe processor will handle it automatically.")
-            
-        print("✅ Successfully dispatched to Video Processor!", flush=True)
+    try:
+        requests.get(N8N_BASE_URL, timeout=2)
+    except:
+        pass
 
-    except Exception as e:
-        print(f"❌ Error pinging Processor: {str(e)}", flush=True)
-        await status_msg.edit_text(f"❌ Failed to reach Video Factory.\nError: {str(e)}")
+    # Package the instructions
+    payload = {
+        'url': video_url,
+        'campaign': campaign,
+        'position': position,
+        'target': target,
+        'webhook_reply_url': N8N_WEBHOOK_URL 
+    }
+
+    # 2. THE SNOOZE BUTTON (Retry Loop)
+    # n8n takes 2 mins. 6 retries * 30 seconds = 3 full minutes of patience.
+    max_retries = 6 
+    
+    for attempt in range(max_retries):
+        try:
+            await status_msg.edit_text(f"⏳ Attempt {attempt + 1}/{max_retries}: Waking up the factory (Processor & n8n). This takes ~2 mins...")
+            print(f"📡 Sending task to Processor (Attempt {attempt + 1})...", flush=True)
+            
+            # Fire the actual request. Use a 60s timeout so it doesn't hang forever on a dead connection.
+            response = requests.post(PROCESSOR_URL, json=payload, timeout=60)
+            
+            # If we hit the 502/503 Bad Gateway, Render is still booting.
+            if response.status_code in [502, 503, 504]:
+                print(f"Render sleeping (Status {response.status_code}). Waiting 30s...")
+                await asyncio.sleep(30)
+                continue
+                
+            response.raise_for_status() # Catch any other hard errors
+            
+            # --- SUCCESS ---
+            reply_data = response.json()
+            queue_pos = reply_data.get('queue_position', 1)
+            
+            if queue_pos == 1:
+                await status_msg.edit_text(f"✅ Success! Factory is processing your video right now.\nCampaign: {campaign.upper()}\n\nIt will arrive in n8n shortly.")
+            else:
+                await status_msg.edit_text(f"✅ Task queued! You are #{queue_pos} in line.\nCampaign: {campaign.upper()}\n\nThe processor will handle it automatically.")
+                
+            print("✅ Successfully dispatched to Video Processor!", flush=True)
+            return # Exit the function, we are done!
+
+        except (requests.exceptions.RequestException, requests.exceptions.ReadTimeout) as e:
+            # If the connection drops while Render is booting
+            print(f"❌ Network issue while booting: {str(e)}. Retrying in 30s...", flush=True)
+            await asyncio.sleep(30)
+
+    # If the loop finishes all 6 attempts and hasn't returned success:
+    await status_msg.edit_text(f"❌ Failed to reach Video Factory after 3 minutes. Please try again.")
 
 if __name__ == '__main__':
     if not TOKEN:
