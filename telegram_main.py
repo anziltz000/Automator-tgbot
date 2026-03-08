@@ -10,10 +10,8 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, Callb
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-# Keep Webhook URL dynamic so you don't expose your exact n8n webhook path
 N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "YOUR_N8N_WEBHOOK_URL_HERE")
 
-# Hardcoded URLs for the Alarm Clock
 PROCESSOR_POST_URL = "https://processor-n8n-automator.onrender.com/process"
 PROCESSOR_WAKE_URL = "https://processor-n8n-automator.onrender.com"
 N8N_WAKE_URL = "https://n8n-render-oo07.onrender.com"
@@ -91,6 +89,12 @@ def get_upload_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
+def get_confirmation_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("✅ I made sure they are running!", callback_data="confirm_awake")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
 # --- STEP 1: User Sends Link ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text
@@ -122,8 +126,40 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target = data.split("_")[1]
         context.user_data['target'] = target
         
-        await query.edit_message_text(f"⏰ Ringing the factory alarm bell...")
+        await query.edit_message_text("🔍 Checking if factory is awake...")
+        await check_factory_status(update, context)
+        
+    elif data == "confirm_awake":
+        await query.edit_message_text("🚀 Sending task to factory now...")
         await send_to_processor(update, context)
+
+# --- THE HEALTH CHECKER ---
+async def check_factory_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    status_msg = update.callback_query.message
+    is_awake = False
+
+    try:
+        # Give it a tiny 3-second window. If it's asleep, Render won't answer in time.
+        response = await asyncio.to_thread(requests.get, PROCESSOR_WAKE_URL, timeout=3)
+        if response.status_code == 200:
+            is_awake = True
+    except:
+        pass # It timed out, so it's definitely asleep!
+
+    if is_awake:
+        # If the cron job is active (after college), it skips the manual check entirely!
+        await status_msg.edit_text("✅ Factory is fully awake! Processing video...")
+        await send_to_processor(update, context)
+    else:
+        # Factory is asleep. Give the user the manual override!
+        text = (
+            "⚠️ **The Factory is currently ASLEEP!**\n\n"
+            "Please click both links below to wake them up. Wait until the web pages load on your phone:\n\n"
+            f"1️⃣ [Wake up Processor]({PROCESSOR_WAKE_URL})\n"
+            f"2️⃣ [Wake up n8n]({N8N_WAKE_URL})\n\n"
+            "*(Once you are sure they are awake, click the button below!)*"
+        )
+        await status_msg.edit_text(text, parse_mode='Markdown', reply_markup=get_confirmation_keyboard(), disable_web_page_preview=True)
 
 # --- THE DISPATCHER: Send JSON to the Video Processor ---
 async def send_to_processor(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -134,7 +170,6 @@ async def send_to_processor(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     status_msg = update.callback_query.message
 
-    # Package the instructions
     payload = {
         'url': video_url,
         'campaign': campaign,
@@ -143,80 +178,42 @@ async def send_to_processor(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'webhook_reply_url': N8N_WEBHOOK_URL 
     }
 
-    # --- THE VIP BROWSER DISGUISE ---
-    # This tricks Render into thinking a real human on Google Chrome clicked a link
-    vip_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1"
-    }
-
-    # 1. THE ALARM CLOCK: Ping in the background using the Disguise
     try:
-        # Timeout increased to 10s to ensure Render fully registers the "human" visit
-        await asyncio.to_thread(requests.get, PROCESSOR_WAKE_URL, headers=vip_headers, timeout=10)
-        await asyncio.to_thread(requests.get, N8N_WAKE_URL, headers=vip_headers, timeout=10)
-    except:
-        pass # Ignore the error, the alarm bell was still rung!
+        # Since you manually verified it's running, we just send it straight through!
+        response = await asyncio.to_thread(
+            requests.post, 
+            PROCESSOR_POST_URL, 
+            json=payload, 
+            timeout=60
+        )
+        
+        if response.status_code in [502, 503, 504]:
+            await status_msg.edit_text("❌ Factory wasn't fully awake yet! Please click the links again, wait 30 seconds, and try submitting a new link.")
+            return
+            
+        response.raise_for_status() 
+        
+        # --- SUCCESS ---
+        reply_data = response.json()
+        queue_pos = reply_data.get('queue_position', 1)
+        
+        if queue_pos == 1:
+            await status_msg.edit_text(f"✅ Success! Factory is processing your video right now.\nCampaign: {campaign.upper()}")
+        else:
+            await status_msg.edit_text(f"✅ Task queued! You are #{queue_pos} in line.\nCampaign: {campaign.upper()}")
 
-    # 2. THE SNOOZE BUTTON (Retry Loop)
-    max_retries = 6 # 6 attempts x 30 seconds = 3 full minutes of patience.
-    
-    for attempt in range(max_retries):
-        try:
-            await status_msg.edit_text(f"⏳ Attempt {attempt + 1}/{max_retries}: Waking up the factory (Processor & n8n). This takes ~2 mins...")
-            print(f"📡 Sending task to Processor (Attempt {attempt + 1})...", flush=True)
-            
-            # RUN IN BACKGROUND THREAD: This prevents the bot from freezing!
-            response = await asyncio.to_thread(
-                requests.post, 
-                PROCESSOR_POST_URL, 
-                json=payload, 
-                headers=vip_headers, # We use the disguise here too just to be safe!
-                timeout=60
-            )
-            
-            # If we hit the 502/503/504 Bad Gateway, Render is still booting.
-            if response.status_code in [502, 503, 504]:
-                print(f"Render sleeping (Status {response.status_code}). Waiting 30s...")
-                await asyncio.sleep(30)
-                continue
-                
-            response.raise_for_status() # Catch any other hard errors
-            
-            # --- SUCCESS ---
-            reply_data = response.json()
-            queue_pos = reply_data.get('queue_position', 1)
-            
-            if queue_pos == 1:
-                await status_msg.edit_text(f"✅ Success! Factory is processing your video right now.\nCampaign: {campaign.upper()}\n\nIt will arrive in n8n shortly.")
-            else:
-                await status_msg.edit_text(f"✅ Task queued! You are #{queue_pos} in line.\nCampaign: {campaign.upper()}\n\nThe processor will handle it automatically.")
-                
-            print("✅ Successfully dispatched to Video Processor!", flush=True)
-            return # Exit the function, we are done!
-
-        except Exception as e:
-            # If the connection drops while Render is booting
-            print(f"❌ Network issue while booting: {str(e)}. Retrying in 30s...", flush=True)
-            await asyncio.sleep(30)
-
-    # If the loop finishes all 6 attempts and hasn't returned success:
-    await status_msg.edit_text(f"❌ Failed to reach Video Factory after 3 minutes. Please try again.")
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Failed to reach Factory. Error: {str(e)}")
 
 if __name__ == '__main__':
     if not TOKEN:
         print("❌ Error: TELEGRAM_TOKEN not found.", flush=True)
         exit(1)
 
-    # 1. Start the Flask Keep-Awake Server
     server_thread = Thread(target=run_flask)
     server_thread.daemon = True
     server_thread.start()
 
-    # 2. Start the Telegram Bot
     print("🤖 Telegram Bot Started and polling...", flush=True)
     application = ApplicationBuilder().token(TOKEN).build()
     
