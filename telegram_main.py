@@ -14,7 +14,7 @@ N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "YOUR_N8N_WEBHOOK_URL_HERE")
 
 PROCESSOR_POST_URL = "https://processor-n8n-automator.onrender.com/process"
 PROCESSOR_WAKE_URL = "https://processor-n8n-automator.onrender.com"
-# NO MORE n8n wake URL needed! 24/7 Koyeb power! 🚀
+N8N_WAKE_URL = "https://formidable-genovera-anziiiii-0be0ed80.koyeb.app"
 
 # Setup Logging
 logging.basicConfig(
@@ -90,9 +90,8 @@ def get_upload_keyboard():
     return InlineKeyboardMarkup(keyboard)
 
 def get_confirmation_keyboard():
-    # Changed text to singular since we only check 1 thing now!
     keyboard = [
-        [InlineKeyboardButton("✅ I made sure it is running!", callback_data="confirm_awake")]
+        [InlineKeyboardButton("✅ I made sure they are running!", callback_data="confirm_awake")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -127,11 +126,11 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target = data.split("_")[1]
         context.user_data['target'] = target
         
-        await query.edit_message_text("🔍 Checking if Processor is awake...")
+        await query.edit_message_text("🔍 Checking if factory is awake...")
         await check_factory_status(update, context)
         
     elif data == "confirm_awake":
-        await query.edit_message_text("🚀 Sending task to Processor now...")
+        await query.edit_message_text("🚀 Sending task to factory now...")
         await send_to_processor(update, context)
 
 # --- THE HEALTH CHECKER ---
@@ -140,23 +139,23 @@ async def check_factory_status(update: Update, context: ContextTypes.DEFAULT_TYP
     is_awake = False
 
     try:
-        # Give it a tiny 3-second window. If it's asleep, Render won't answer in time.
         response = await asyncio.to_thread(requests.get, PROCESSOR_WAKE_URL, timeout=3)
         if response.status_code == 200:
             is_awake = True
     except:
-        pass # It timed out, so it's definitely asleep!
+        pass 
 
     if is_awake:
-        await status_msg.edit_text("✅ Processor is fully awake! Processing video...")
+        await status_msg.edit_text("✅ Factory is fully awake! Processing video...")
         await send_to_processor(update, context)
     else:
-        # Factory is asleep. Give the user the single manual override link!
+        # Give the user the manual override!
         text = (
-            "⚠️ **The Processor is currently ASLEEP!**\n\n"
-            "Tap the link below to copy it, or open it in your browser to wake it up:\n\n"
-            f"🔌 **`{PROCESSOR_WAKE_URL}`**\n\n"
-            "*(Once the page loads, click the button below!)*"
+            "⚠️ **The Factory is currently ASLEEP!**\n\n"
+            "Please click both links below to wake them up. Wait until the web pages load on your phone:\n\n"
+            f"1️⃣ [Wake up Processor]({PROCESSOR_WAKE_URL})\n"
+            f"2️⃣ [Wake up n8n]({N8N_WAKE_URL})\n\n"
+            "*(Once you are sure they are awake, click the button below!)*"
         )
         await status_msg.edit_text(text, parse_mode='Markdown', reply_markup=get_confirmation_keyboard(), disable_web_page_preview=True)
 
@@ -178,7 +177,6 @@ async def send_to_processor(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     try:
-        # Since you manually verified it's running, we just send it straight through!
         response = await asyncio.to_thread(
             requests.post, 
             PROCESSOR_POST_URL, 
@@ -187,7 +185,7 @@ async def send_to_processor(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         if response.status_code in [502, 503, 504]:
-            await status_msg.edit_text("❌ Processor wasn't fully awake yet! Please click the link again, wait 30 seconds, and try submitting a new link.")
+            await status_msg.edit_text("❌ Factory wasn't fully awake yet! Please click the links again, wait 30 seconds, and try submitting a new link.")
             return
             
         response.raise_for_status() 
@@ -202,7 +200,7 @@ async def send_to_processor(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await status_msg.edit_text(f"✅ Task queued! You are #{queue_pos} in line.\nCampaign: {campaign.upper()}")
 
     except Exception as e:
-        await status_msg.edit_text(f"❌ Failed to reach Processor. Error: {str(e)}")
+        await status_msg.edit_text(f"❌ Failed to reach Factory. Error: {str(e)}")
 
 if __name__ == '__main__':
     if not TOKEN:
