@@ -37,25 +37,18 @@ def run_flask():
 CAMPAIGN_INFO_TEXT = """
 💰 **ACTIVE CAMPAIGNS LIST** 💰
 
-[$20] **Rajbet** (YT & Insta)
-   South Asian content (Cricket, PUBG, Bollywood). 11 sec.
-   *100 submit/per social*
-
 [$20] **LeonBET** (YT Only)
    (1K) Any English Content. 15 sec.
    *25 submit per/social*
-
-[$20] **TucanBit.io** (YT Only)
-   (1K) Any English Content. 12 sec.
-   *30 submit per/social*
 
 [$20] **Bitz.io** (YT & Insta)
    Any English Content. 20 sec.
    *100 submit per/social*
    ⚠️ *Must tag @bitzcasino on Insta!*
 
-[$50] **Betstrike** (YT Only)
-   Gaming/Sports PIC LOGO (Smart Color Auto-Switch)
+[$80] **AceBet** (YT Only)
+   (1K) LIVESTREAM Tier 1 streamer clips only! (Kai Cenat, Speed, Jynxzi, FaZe guys etc).
+   *25 submit per/social*
 
 --------------------------------------------------
 👇 **SELECT CAMPAIGN BELOW** 👇
@@ -64,11 +57,9 @@ CAMPAIGN_INFO_TEXT = """
 # --- MENUS (The Buttons) ---
 def get_campaign_keyboard():
     keyboard = [
-        [InlineKeyboardButton("🏏 Rajbet ($20)", callback_data="cam_rajbet"),
-         InlineKeyboardButton("🦁 LeonBET ($20)", callback_data="cam_leonbet")],
-        [InlineKeyboardButton("🐦 TucanBit ($20)", callback_data="cam_tucanbit"),
+        [InlineKeyboardButton("🦁 LeonBET ($20)", callback_data="cam_leonbet"),
          InlineKeyboardButton("🎰 Bitz.io ($20)", callback_data="cam_bitz")],
-        [InlineKeyboardButton("⚡ Betstrike (Smart Logo) ($50)", callback_data="cam_betstrike")],
+        [InlineKeyboardButton("🔥 AceBet ($80)", callback_data="cam_acebet")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -149,7 +140,6 @@ async def check_factory_status(update: Update, context: ContextTypes.DEFAULT_TYP
         await status_msg.edit_text("✅ Factory is fully awake! Processing video...")
         await send_to_processor(update, context)
     else:
-        # Give the user the manual override!
         text = (
             "⚠️ **The Factory is currently ASLEEP!**\n\n"
             "Please click both links below to wake them up. Wait until the web pages load on your phone:\n\n"
@@ -190,7 +180,6 @@ async def send_to_processor(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         response.raise_for_status() 
         
-        # --- SUCCESS ---
         reply_data = response.json()
         queue_pos = reply_data.get('queue_position', 1)
         
